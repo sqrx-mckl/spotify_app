@@ -127,3 +127,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Confidential
+/private
+/.env_dump
