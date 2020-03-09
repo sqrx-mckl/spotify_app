@@ -1,5 +1,4 @@
-from .util import (
-    adapter_spotipy_api,
-    facade_enrich_artist,
-    json_list2dict,
-)
+from .util import json_list2dict, normalize_request, enrich_by_feature
+
+from .adapter_spotipy_api import adapter_spotipy_api
+from .facade_enrich_artist_genre import facade_enrich_artist_genre
