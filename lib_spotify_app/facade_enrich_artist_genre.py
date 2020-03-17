@@ -13,7 +13,7 @@ from sklearn.cluster import OPTICS
 import matplotlib.pyplot as plt
 from IPython.display import display
 
-from .util import enrich_by_feature
+from .util import _enrich_by_feature
 
 class facade_enrich_artist_genre:
     
@@ -60,7 +60,7 @@ class facade_enrich_artist_genre:
 
 
     def enrich_artists(self, sp:spotipy.Spotify)->pd.DataFrame:
-        df = enrich_by_feature(self._artists,
+        df = _enrich_by_feature(self._artists,
                                w=50,
                                f=sp.artists)
 

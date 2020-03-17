@@ -68,28 +68,23 @@ def normalize_request(request)->pd.DataFrame:
     # some request gives back a strange dict with key the name of the
     # request and values the lists output
     if isinstance(request, dict):
-        _request = list(request.values())[0]
-    else:
-        _request = request
+        request = list(request.values())[0]
 
     # if there is multilple request inside the request (like a list). The 
     # output is a list, else is a dict
     if isinstance(request, list):
-        df_list = [pd.json_normalize(json_list2dict(r)) for r in _request]
+        df_list = [pd.json_normalize(json_list2dict(r)) for r in request]
         df = pd.concat(df_list).reset_index()
     elif isinstance(request, dict):
-        df = pd.json_normalize(json_list2dict(_request))
+        df = pd.json_normalize(json_list2dict(request))
     
     return df
 
 
-def enrich_by_feature(ser:pd.Series, w:int, f)->pd.DataFrame:
+def _enrich_by_feature(ser:pd.Series, f, w:int)->pd.DataFrame:
     """
-    Enrich the dataframe by requesting information.
-    The request is done via a function which is called with a rolling window.
-    Use the following command to join your initial DataFrame with the enriched data:
-    "df.join(dfe, on=col)"
-
+    Helper function to retrieve the enriched data for enrich_df_by_feature
+    
     Parameters
     ----------
     ser : pd.Series
@@ -98,18 +93,45 @@ def enrich_by_feature(ser:pd.Series, w:int, f)->pd.DataFrame:
         Size of the rolling window (to request multiple rows at a time)
     f : function
         Function to use to enrich the data
+    
     Returns
     -------
     pd.DataFrame
         Enriched DataFrame
     """
 
-    window_groups = range(len(ser)) // w
+    window_groups = [x // w for x in range(len(ser))]
 
     dfe = ser.groupby(window_groups)\
              .apply(lambda x: normalize_request(f(x)))\
-             .add_prefix(f'{ser.name}.enrich.')\
              .set_index(ser)
 
     return dfe
 
+def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
+    """
+    Enrich the dataframe by requesting information
+    The request is done via a function which is called with a rolling window.
+    Use the following command to join your initial DataFrame with the enriched
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to be enriched
+    col : str
+        Initial column to use for enrichment
+    w : int
+        Size of the rolling window (to request multiple rows at a time)
+    f : function
+        Function to use to enrich the data
+    
+    Returns
+    -------
+    pd.DataFrame
+        [description]
+    """
+
+    df_enriched = _enrich_by_feature(df[col], f=f, w=w)
+    df_enriched = df_enriched.add_prefix(f'{col}.')
+
+    return df.join(df_enriched, on=col)

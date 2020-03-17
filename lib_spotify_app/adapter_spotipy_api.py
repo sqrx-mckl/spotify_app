@@ -41,16 +41,16 @@ class adapter_spotipy_api:
         self.cache_path = Path(cache_path,
                                 f'.cache-{self.credential["username"]}')
 
-        # from "get_token"
+        # from "_get_token"
         self.token_code = None
         # from "open_session"
-        self.sp = None
+        self.sp:spotipy.Spotify = None
 
 
     def refresh_token(self):
         pass
 
-    def get_token(self):
+    def _get_token(self):
         # token need to be refreshed
         try:
             self.token_code = spotipy.util.prompt_for_user_token(
@@ -58,7 +58,7 @@ class adapter_spotipy_api:
                 client_id=self.credential["client_id"],
                 client_secret=self.credential["client_secret"],
                 redirect_uri="http://localhost/",
-                scope=scope,
+                scope=self.scope,
                 cache_path=self.cache_path
             )
         except:
@@ -71,6 +71,7 @@ class adapter_spotipy_api:
             json.dump(self.credential, file)
 
     def open_session(self):
+        self._get_token()
         self.sp = spotipy.Spotify(auth=self.credential['token']['code'])
 
     def query_liked_songs(self, tracks_count:int=-1, limit:int=50):
