@@ -47,10 +47,10 @@ class adapter_spotipy_api:
         self.sp:spotipy.Spotify = None
 
 
-    def refresh_token(self):
-        pass
-
     def _get_token(self):
+        NotImplementedError('''deprecated method
+        refer to https://github.com/plamere/spotipy/issues/263''')
+
         # token need to be refreshed
         try:
             self.token_code = spotipy.util.prompt_for_user_token(
@@ -70,9 +70,27 @@ class adapter_spotipy_api:
         with open(self.credential_fp, 'w') as file:
             json.dump(self.credential, file)
 
+
     def open_session(self):
-        self._get_token()
-        self.sp = spotipy.Spotify(auth=self.credential['token']['code'])
+        """
+        Open a session with OAuth
+        refer to <https://github.com/plamere/spotipy/issues/263>
+        """
+
+        ## Depreciated
+        # self._get_token()
+        # self.sp = spotipy.Spotify(auth=self.credential['token']['code'])
+
+        # new method as per <https://github.com/plamere/spotipy/issues/263>
+
+        self.sp=spotipy.Spotify(
+            auth_manager=spotipy.SpotifyOAuth(
+                client_id=self.credential["client_id"],
+                client_secret=self.credential["client_secret"],
+                redirect_uri="http://localhost/",
+                scope=self.scope,
+                cache_path=self.cache_path)
+        )
 
     def query_liked_songs(self, tracks_count:int=-1, limit:int=50):
         result_liked_songs = None
@@ -94,7 +112,7 @@ class adapter_spotipy_api:
             offset = offset + limit
 
             # check condition if there is one
-            if tracks_count > 0 and offset > tracks_count:
+            if tracks_count > 0 and offset >= tracks_count:
                 break
 
         return result_liked_songs

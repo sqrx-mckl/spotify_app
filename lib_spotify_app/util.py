@@ -51,7 +51,7 @@ def json_list2dict(d:Dict)->Dict:
     return d
 
 
-def normalize_request(request)->pd.DataFrame:
+def normalize_request(_request)->pd.DataFrame:
     """
     transform the output of a request into a DataFrame
     
@@ -67,8 +67,14 @@ def normalize_request(request)->pd.DataFrame:
     """
     # some request gives back a strange dict with key the name of the
     # request and values the lists output
-    if isinstance(request, dict):
-        request = list(request.values())[0]
+    if isinstance(_request, dict) and 'items' in _request.keys():
+        request = _request['items']
+    elif isinstance(_request, dict) \
+        and len(_request.keys()) == 1 \
+        and isinstance(_request[list(_request.keys())[0]], list):
+        request = _request[list(_request.keys())[0]]
+    else:
+        request = _request
 
     # if there is multilple request inside the request (like a list). The 
     # output is a list, else is a dict
@@ -135,3 +141,4 @@ def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
     df_enriched = df_enriched.add_prefix(f'{col}.')
 
     return df.join(df_enriched, on=col)
+    
