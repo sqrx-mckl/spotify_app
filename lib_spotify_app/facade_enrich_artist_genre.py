@@ -72,6 +72,7 @@ class facade_enrich_artist_genre:
 
 
     def request_artist_features(self, sp:spotipy.Spotify):
+        
         self.feature:pd.DataFrame = _enrich_by_feature(self._artist,
                                                        w=50,
                                                        f=sp.artists)
@@ -92,8 +93,11 @@ class facade_enrich_artist_genre:
         self.df_genre:pd.DataFrame = self.df_genre.loc[:,~mask]
 
 
-    def cluster_genre(self):
+    def cluster_genre_fit(self):
         """
+        This function fit the clustering models (the hierarchy one).
+        A "cluster_genre_transform()" exist to apply your specific proposal
+
         Clustering is done by 2 algorithms:
         * DBSCAN with OPTICS to detect the outliers
         * hierarchical clustering to create the "super-genre"
@@ -107,44 +111,112 @@ class facade_enrich_artist_genre:
 
         df_genre = self.df_genre.transpose()
 
-        self.cl_optics = OPTICS(
+        self._optics = OPTICS(
             max_eps=1,
             min_samples=2,# to avoid lonely genre, goal is to have super-genre
             metric='yule',
             cluster_method='dbscan',
             algorithm='brute',# only valid algorithm for this metric
-            n_jobs=-2
+            n_jobs=-1
         )
-        self.cl_optics = self.cl_optics.fit_predict(df_genre)
+        self.cluster_optics = self._optics.fit_predict(df_genre)
 
         # remove the outlier cluster
-        self.cl_linkage = linkage(df_genre,
-                            method=self.method,
-                            metric='yule')
+        self._df_genre_inlier = df_genre.loc[self.cluster_optics > -1]
+        self._df_genre_outlier = df_genre.loc[self.cluster_optics == -1]
+
+        self._linkage = linkage(self._df_genre_inlier,
+                                method=self.method,
+                                metric='yule')
         
+
+    def _get_group_list(self, cluster:List[int])->pd.DataFrame:
+        """
+        Convert a list of cluster and a DataFrame into a "semi-table" which 
+        contains in each column all the genre for 1 supergenre. The size of 
+        each column is different, so filled with NaN at the end.
+        
+        Parameters
+        ----------
+        cluster : List[int]
+            List of group as int
+        
+        Returns
+        -------
+        pd.DataFrame
+            "semi-table" with in each column the list of genre in a supergenre
+        """
+        groups = self.df_genre.columns\
+                              .to_frame()\
+                              .reset_index(drop=True)\
+                              .assign(cluster=cluster)\
+                              .pivot(columns='cluster')
+
+        # reduce row size, only need a dropping list of genres
+        groups = groups.apply(
+            lambda x: x.sort_values().reset_index(drop=True)
+        )
+        groups = groups.dropna(how='all')
+
+        return groups
+
+
+    def cluster_genre_transform(self, t:float=1.5):
+        """
+        Cut the linkage matrix of the hierarchical cluster using 'distance' 
+        criterion. For better 
+        understanding, use the available plotting functions such as:
+        * "plot_clustermap()
+        * plot_dendrogram()
+        
+        Parameters
+        ----------
+        t : float
+            this is the threshold to apply when forming flat clusters.
+            By default 1.5
+        """
+        
+        # Flat cluster from the hierarchy cluster algorithm
+        self.cluster_hierarchical = fcluster(self._linkage,
+                                             t,
+                                             criterion='distance')
+
+        # Add the outliers selected by DBSCAN
+        self.cluster_hierarchical #//TODO
+
+        # Get a "semi-table" with the supergenre group
+        self.supergenre_group = self._get_group_list(self.cluster_hierarchical)
+
 
     def plot_clustermap(self):
         plt.figure()
-        g = sns.clustermap(df_genre,
-                           row_linkage=self.cl_linkage,
+        g = sns.clustermap(self.df_genre.transpose(),
+                           row_linkage=self._linkage,
                            col_cluster=False,
                            yticklabels=True)
-        g.fig.suptitle(self.method)
+        g.fig.suptitle(f'method = {self.method}')
 
 
     def plot_dendrogram(self):
+        plt.figure()
         dendrogram(
-            self.cl_linkage,
+            self._linkage,
             orientation='left',
             labels=self.genre.to_list()
         )
 
 
-    def create_super_genre(self):
-        from itertools import chain
+    def get_supergenre(self):
 
-        
-        pass
+        super_genre = df_genre_super\
+            .applymap(lambda x: self._split_word(x))\
+            .agg(lambda x: self._robust_str_mode(*x.to_list()))
+
+        self.df_supergenre.columns = super_genre
+
+        self.df_supergenre = self.df_supergenre.applymap(
+            lambda x: str(x).replace('genre_', '') if isinstance(x, str) else x
+        )
 
 
     def enrich_artist_genre(self, df:pd.DataFrame)->pd.DataFrame:
@@ -183,7 +255,10 @@ def _robust_str_mode(x:List[str], sep:str='-')->str:
         [str] -- mode word
     """
     from statistics import mode
-    
+    from itertools import chain
+
+    x = list(chain(x))
+
     try:
         return mode(x)
     except:

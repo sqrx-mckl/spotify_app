@@ -106,13 +106,19 @@ def _enrich_by_feature(ser:pd.Series, f, w:int)->pd.DataFrame:
         Enriched DataFrame
     """
 
-    window_groups = [x // w for x in range(len(ser))]
+    # Get unique set of values
+    ser_un:pd.Series = pd.Series(ser.unique())
 
-    dfe = ser.groupby(window_groups)\
-             .apply(lambda x: normalize_request(f(x)))\
-             .set_index(ser)
+    # Get request group
+    window_groups = [x // w for x in range(len(ser_un))]
 
-    return dfe
+    # do the request, normalize it and set as index the initial serie
+    dfe = ser_un.groupby(window_groups)\
+                .apply(lambda x: normalize_request(f(x)))\
+                .set_index(ser_un)
+
+    # "map" the index to the full initial index
+    return dfe.loc[ser.to_list()]
 
 def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
     """

@@ -102,6 +102,16 @@ genre_toptracks = lib.facade_enrich_artist_genre(
 
 genre_toptracks.request_artist_features(sp_adapter.sp)
 genre_toptracks.clean_useless_genre()
-genre_toptracks.cluster_genre()
+genre_toptracks.cluster_genre_fit()
+
+# %%
+
+genre_toptracks.plot_clustermap()
+genre_toptracks.plot_dendrogram()
+
+# %%
+
+genre_toptracks.cluster_genre_transform()
+
 
 # %%
