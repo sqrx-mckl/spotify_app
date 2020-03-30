@@ -15,12 +15,11 @@ sns.set_context('notebook')
 import lib_spotify_app as lib
 
 import pandas as pd
-pd.reset_option()
+
 pd.set_option('max_columns', None)
 pd.reset_option('max_rows')
 
 from typing import Dict, List, Union
-from copy import deepcopy
 
 import matplotlib.pyplot as plt
 
@@ -70,48 +69,94 @@ top_artists[['popularity', 'followers.total']]\
           sharey=True,
           sharex=False)
 
-#%% standard data enrichment
-
-def data_enrich(df:pd.DataFrame, col:str='id')->pd.DataFrame:
-    return lib.enrich_df_by_feature(df,
-                                    col=col,
-                                    f=sp_adapter.sp.audio_features,
-                                    w=100)
-
-
 # %%
 
 df_toptracks = lib.normalize_request(
     sp_adapter.sp.current_user_top_tracks(limit=50)
-).pipe(data_enrich, col='id')
-
-#%%
-
-df_likedsong = lib.normalize_request(
-    sp_adapter.query_liked_songs(tracks_count=200)
-).pipe(data_enrich, col='track.id')
+).pipe(lib.enrich_audiofeature, col='id')
 
 # %%
 
 genre_toptracks = lib.facade_enrich_artist_genre(
-    artists=df_toptracks['artists.0.id']
+    artists=df_toptracks['artists.0.id'],
+    sp=sp_adapter.sp
 )
 
+#%%
+genre_toptracks.cluster_genre(method='weighted',
+                              fit=True,
+                              verbose=True)
+
+#%%
+
+genre_toptracks.test_supergenre_distance()
+genre_toptracks.test_supergenre_maxclust()
+
+#%%
+
+df_likedsong:pd.DataFrame = lib.normalize_request(
+    sp_adapter.query_liked_songs()
+).pipe(lib.enrich_audiofeature, col='track.id')
+
+df_likedsong.to_csv(Path('private', 'likedsongs.csv'))
+
+df_likedsong['added_at'] = pd.to_datetime(df_likedsong['added_at'])
+
+# plot the amount of time I added a song
+df_likedsong['added_at']\
+            .groupby(by=df_likedsong['added_at'].dt.date)\
+            .count()\
+            .plot()\
+            .set_title('How many songs I liked per day')
+
+#%%
+
+genre_likedsong = lib.facade_enrich_artist_genre(
+    df_likedsong['track.artists.0.id'],
+    sp=sp_adapter.sp
+)
+
+#%%
+
+genre_likedsong.df_genre = genre_likedsong._df_genre_raw
+genre_likedsong.clean_useless_genre()
+pprint(genre_likedsong._genre_cleaned.to_list())
+pprint(genre_likedsong.genre.to_list())
+
+#%%
+
+genre_likedsong.cluster_genre_fit(method='average')
+
+genre_likedsong.plot_clustermap()
+genre_likedsong.plot_dendrogram()
+
+#%%
+
+genre_likedsong.cluster_genre_transform(t=100, criterion='maxclust')
+genre_likedsong._analyse_supergenre()
+print(f'there is {len(genre_likedsong.supergenre)} supergenres')
+# genre_likedsong.plot_heatmap_supergenre()
+
+#%%
+
+genre_likedsong.test_supergenre_distance()
+genre_likedsong.test_supergenre_maxclust()
 
 # %%
 
-genre_toptracks.request_artist_features(sp_adapter.sp)
-genre_toptracks.clean_useless_genre()
-genre_toptracks.cluster_genre_fit()
+dill.dump_session(Path('private', 'session_dump_before_plot'))
 
 # %%
 
-genre_toptracks.plot_clustermap()
-genre_toptracks.plot_dendrogram()
+genre_likedsong.cluster_genre_transform_auto(verbose=True)
+
+# %%
+df_likedsong_enrich = genre_likedsong.enrich_df(df_likedsong)
+display(df_likedsong_enrich.sample(20))
 
 # %%
 
-genre_toptracks.cluster_genre_transform()
-
+df_likedsong.to_csv(Path('private', 'likedsongs_enrich.csv'))
 
 # %%
+
