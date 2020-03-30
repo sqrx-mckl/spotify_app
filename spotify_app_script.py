@@ -127,7 +127,7 @@ pprint(genre_likedsong.genre.to_list())
 
 genre_likedsong.cluster_genre_fit(method='average')
 
-genre_likedsong.plot_clustermap()
+# genre_likedsong.plot_clustermap()
 genre_likedsong.plot_dendrogram()
 
 #%%
@@ -144,7 +144,7 @@ genre_likedsong.test_supergenre_maxclust()
 
 # %%
 
-dill.dump_session(Path('private', 'session_dump_before_plot'))
+# dill.dump_session(Path('private', 'session_dump_before_plot'))
 
 # %%
 
@@ -156,7 +156,68 @@ display(df_likedsong_enrich.sample(20))
 
 # %%
 
-df_likedsong.to_csv(Path('private', 'likedsongs_enrich.csv'))
+df_likedsong_enrich.to_csv(Path('private', 'likedsongs_enrich.csv'))
 
 # %%
 
+df_likedsong_enrich = pd.read_csv(Path('private', 'likedsongs_enrich.csv'))
+
+#%%
+
+df = df_likedsong_enrich[[
+    'added_at',
+    'track.album.id',
+    'track.album.images.0.height',
+    'track.album.images.0.url',
+    'track.album.images.0.width',
+    'track.album.name',
+    'track.album.release_date',
+    'track.album.release_date_precision',
+    'track.album.total_tracks',
+    'track.artists.0.id',
+    'track.artists.0.name',
+    'track.duration_ms',
+    'track.id',
+    'track.external_urls.spotify',
+    'track.name',
+    'track.popularity',
+    'track.preview_url',
+    'track.id.danceability',
+    'track.id.energy',
+    'track.id.key',
+    'track.id.loudness',
+    'track.id.mode',
+    'track.id.speechiness',
+    'track.id.acousticness',
+    'track.id.instrumentalness',
+    'track.id.liveness',
+    'track.id.valence',
+    'track.id.tempo',
+    'track.id.time_signature',
+    'track.artists.0.genres',
+    'track.artists.0.supergenres'
+]]
+
+df.to_csv(Path('private', 'df_analysis.csv'))
+
+df:pd.DataFrame = pd.read_csv(Path('private', 'df_analysis.csv'))
+
+# %%
+
+df_num = df.select_dtypes('number')
+
+fig, ax = plt.subplots(df_num.shape[1], 1,
+                        figsize=(20, 20),
+                        gridspec_kw={'hspace': 1})
+for k, col in enumerate(df_num):
+    df_num.boxplot(column=col, vert=False, ax=ax[k])
+
+df_num.hist(figsize=(20,14))
+
+#%%
+# From now on I will plot the data
+import plotly.graph_objects as go
+
+fig = go.Figure()
+
+# %%
