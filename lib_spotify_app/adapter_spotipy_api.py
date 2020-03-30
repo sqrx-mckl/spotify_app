@@ -92,28 +92,48 @@ class adapter_spotipy_api:
                 cache_path=self.cache_path)
         )
 
-    def query_liked_songs(self, tracks_count:int=-1, limit:int=50):
-        result_liked_songs = None
-        offset = 0
+    def query_liked_songs(self, tracks_count:int=None, limit:int=50):
+        """
+        Query the current user liked songs in a loop. Spotify API limit the number of queried songs to 50 at a time.
+        
+        Parameters
+        ----------
+        tracks_count : int, optional
+            quantity of tracks to query, chose None to query all tracks
+            by default None
+        limit : int, optional
+            how many tracks to query at once, maximum is 50, by default 50
+        
+        Returns
+        -------
+        [type]
+            The results as in a list of JSON request results
+        """
+
+        result = {'items':[]}
 
         while True:
-            limit_temp = min([limit, tracks_count-offset])
-            result_temp = self.sp.current_user_saved_tracks(
-                limit=limit_temp,
-                offset=offset
+            # cache the previous result
+            result_item_temp = result['items']
+
+            # new query with recursive arguments
+            result = self.sp.current_user_saved_tracks(
+                limit=limit,
+                offset=len(result_item_temp)
             )
 
+            # update info using query result
+            if tracks_count is None:
+                tracks_count = result['total']
+            
             # append the dictionnary output
-            if result_liked_songs is None:
-                result_liked_songs = result_temp
-            else:
-                result_liked_songs['items'] += result_temp['items']
+            result['items'] += result_item_temp
 
-            offset = offset + limit
+            # update argument for last query adjustement
+            limit = min([limit, tracks_count-len(result['items'])])
 
-            # check condition if there is one
-            if tracks_count > 0 and offset >= tracks_count:
+            if limit <= 0:
                 break
 
-        return result_liked_songs
+        return result
 
