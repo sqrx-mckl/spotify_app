@@ -19,6 +19,7 @@ from itertools import chain
 from collections import Counter
 from statistics import mode
 
+from .adapter_spotipy_api import adapter_spotipy_api
 
 def json_list2dict(d:Dict)->Dict:
     """
@@ -148,3 +149,11 @@ def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
 
     return df.join(df_enriched, on=col)
     
+def enrich_audiofeature(df:pd.DataFrame,
+                        adapter:adapter_spotipy_api,
+                        col:str='id')->pd.DataFrame:
+    return enrich_df_by_feature(df,
+                                col=col,
+                                f=adapter.sp.audio_features,
+                                w=100)
+
