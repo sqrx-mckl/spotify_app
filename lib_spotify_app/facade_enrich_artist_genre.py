@@ -50,7 +50,8 @@ class facade_enrich_artist_genre:
     
     
     def __init__(self, artists:pd.Series, sp:spotipy.Spotify):
-        self._artist:pd.Series = artists
+        self._artist:pd.Series = pd.Series(artists.unique(),
+                                           name = artists.name)
         self._mlb:MultiLabelBinarizer = MultiLabelBinarizer()
 
         self.cluster = None
@@ -114,17 +115,19 @@ class facade_enrich_artist_genre:
 
         # detect in each word in the genre name if it recognizes as a country, 
         # state, language, etc... Genre should be independant of country
-        mask = self.genre.to_series().apply(
-            lambda x: any( [ent.label_ in ['NORP', 'GPE'] \
-                for ent in nlp(x).ents] )
-        )
+        def clean_geo(x:pd.Series):
+            for ent in nlp(x).ents:
+                is_geo = ent.label_ in ['NORP', 'GPE']
+            return any(is_geo)
+
+        mask = self.genre.to_series().apply(clean_geo)
         self._genre_cleaned = self.df_genre.loc[:,mask].columns
         self.df_genre:pd.DataFrame = self.df_genre.loc[:,~mask]
 
         return self._genre_cleaned
 
 
-    def cluster_genre_fit(self, method='weighted'):
+    def cluster_genre_fit(self, method='weighted', algorithm:str='hdbscan'):
         """
         This function fit the clustering models (the hierarchy one).
         A "cluster_genre_transform()" exist to apply your specific proposal
@@ -145,30 +148,42 @@ class facade_enrich_artist_genre:
             by default 'weighted'
         """
 
-        from sklearn.cluster import OPTICS
-
         df_genre = self.df_genre.transpose()
 
-        self._optics = OPTICS(
-            max_eps=1,
-            min_samples=2,# to avoid lonely genre, goal is to have super-genre
-            metric='yule',
-            cluster_method='dbscan',
-            algorithm='brute',# only valid algorithm for this metric
-            n_jobs=-1
-        )
-        self.cluster_optics = self._optics.fit_predict(df_genre)
+        if algorithm is 'dbscan':
+            from sklearn.cluster import OPTICS
+            self._optics = OPTICS(
+                max_eps=1,
+                min_samples=2,# to avoid lonely genre
+                metric='yule',
+                cluster_method='dbscan',
+                algorithm='brute',# only valid algorithm for this metric
+                n_jobs=-1
+            )
+            self.cluster_dbscan = self._optics.fit_predict(df_genre)
+        elif algorithm is 'hdbscan':
+            import hdbscan
+            self._mdl_hdbscan = hdbscan.HDBSCAN(
+                min_cluster_size=2,
+                metric='yule'
+            )
+            self.cluster_dbscan = self._mdl_hdbscan.fit_predict(df_genre)
+        else:
+            raise AttributeError(f'{algorithm} is not available, use "dbscan" or "hdbscan"')
+
 
         # remove the outlier cluster
-        self._df_genre_inlier = self.df_genre.loc[:,self.cluster_optics > -1]
-        self._df_genre_outlier = self.df_genre.loc[:,self.cluster_optics == -1]
+        self._df_genre_inlier = self.df_genre.loc[:,self.cluster_dbscan > -1]
+        self._df_genre_outlier = self.df_genre.loc[:,self.cluster_dbscan == -1]
 
         self._linkage = linkage(self._df_genre_inlier.transpose(),
                                 method=method,
                                 metric='yule')
         
 
-    def _get_group_list(self, cluster:List[int])->pd.DataFrame:
+    def _get_group_list(self,
+                        cluster:List[int],
+                        df_genre:pd.DataFrame=None)->pd.DataFrame:
         """
         Convert a list of cluster and a DataFrame into a "semi-table" which 
         contains in each column all the genre for 1 supergenre. The size of 
@@ -178,17 +193,25 @@ class facade_enrich_artist_genre:
         ----------
         cluster : List[int]
             List of group as int
+        df_genre : pd.DataFrame
+            by default, self.df_genre
+            Can be another dataframe which complies to the format such as
+            self.df_supergenre
         
         Returns
         -------
         pd.DataFrame
             "semi-table" with in each column the list of genre in a supergenre
         """
-        groups = self.df_genre.columns\
-                              .to_frame()\
-                              .reset_index(drop=True)\
-                              .assign(cluster=cluster)\
-                              .pivot(columns='cluster')
+
+        if df_genre is None:
+            df_genre = self.df_genre
+
+        groups = df_genre.columns\
+                         .to_frame()\
+                         .reset_index(drop=True)\
+                         .assign(cluster=cluster)\
+                         .pivot(columns='cluster')
 
         # reduce row size, only need a dropping list of genres
         groups = groups.apply(
@@ -228,7 +251,7 @@ class facade_enrich_artist_genre:
                                              **kwargs)
 
         # Add the outliers selected by DBSCAN
-        self.cluster = self.cluster_optics
+        self.cluster = self.cluster_dbscan
         self.cluster[self.cluster > -1] = self.cluster_hierarchical
 
         # Get a "semi-table" with the supergenre group
@@ -281,13 +304,16 @@ class facade_enrich_artist_genre:
         def minimize_genre_per_artists(x):
             self.cluster_genre_transform(t=x, criterion='distance')
             return self.supergenre_per_artists.mean() \
-                / np.log(len(self.supergenre))
-                # * np.log(self.supergenre_count_genre.max())
+                / np.log10(len(self.supergenre)) \
+                * np.log10(self.supergenre_count_genre.max())
 
         res = minimize_scalar(minimize_genre_per_artists,
                               options={'maxiter':10e4})
 
         self.cluster_genre_transform(t=res.x, criterion='distance')
+
+        # re-apply dbscan
+
 
         if verbose:
             print(f'distance optimal is {res.x}')
@@ -384,12 +410,6 @@ class facade_enrich_artist_genre:
     def supergenre_count_genre(self):
         return self.supergenre_group.agg(lambda x: sum(x.notna()))
 
-    def enrich_df(self, df:pd.DataFrame)->pd.DataFrame:
-        prefix = self._artist.name.split('.')
-        prefix = '.'.join(prefix[:-1]) + '.'
-
-        return df.join(self.df.add_prefix(prefix), on=self._artist.name)
-
 
     @staticmethod
     def _split_word(x:str)->List[str]:
@@ -479,3 +499,13 @@ class facade_enrich_artist_genre:
         plt.figure()
         plt.plot(plt_x, [x[2] for x in test_res])
         plt.legend(['number of supergenre'])
+
+
+    def enrich_df(self, df:pd.DataFrame)->pd.DataFrame:
+        prefix = self._artist.name.split('.')
+        prefix = '.'.join(prefix[:-1]) + '.'
+
+        return df.join(self.df.add_prefix(prefix),
+                       on=self._artist.name)#\
+                # .assign(genres_id=self._mlb.fit_transform(self.df['genres']))
+
