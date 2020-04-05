@@ -3,7 +3,8 @@ from .util import (
     normalize_request,
     _enrich_by_feature,
     enrich_df_by_feature,
-    enrich_audiofeature
+    enrich_audiofeature,
+    plotly_categorical_scatter
 )
 
 from .adapter_spotipy_api import adapter_spotipy_api

@@ -21,6 +21,8 @@ from statistics import mode
 
 from .adapter_spotipy_api import adapter_spotipy_api
 
+import plotly.graph_objects as go
+
 def json_list2dict(d:Dict)->Dict:
     """
     Loop through all fields, and once it meet a list, it convert into a dict.
@@ -157,3 +159,37 @@ def enrich_audiofeature(df:pd.DataFrame,
                                 f=adapter.sp.audio_features,
                                 w=100)
 
+
+def plotly_categorical_scatter(df, x:str, y:str, hue:str, size:str, text:str, link:str)->go.FigureWidget:
+
+    import webbrowser
+
+    def click_event(trace, points, state):
+        print('test')
+        display(points.customdata)
+        [webbrowser.open(point.customdata) for point in points]
+
+    fig = go.FigureWidget()
+
+    for group_name, df_group in df.groupby(hue):
+        fig.add_trace(go.Scattergl(
+            x=df_group[x],
+            y=df_group[y],
+            name=group_name,
+            text=df_group[text],
+            marker_size=df_group[size],
+            customdata=df_group[link],
+            ids=df_group.index.to_list(),
+        ))
+        
+    # Tune marker appearance and layout
+    fig.update_traces(
+        mode='markers', 
+        hoverinfo='text',
+        marker=dict(sizeref=2.*max(df[size])/(5.**2),
+                    line_width=0)
+    )
+    fig.for_each_trace(
+            lambda trace: trace.on_click(click_event, append=True)
+        )
+    return fig
