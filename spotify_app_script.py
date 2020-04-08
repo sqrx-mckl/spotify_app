@@ -266,6 +266,7 @@ for algo in ['tsne', 'umap']:
     sns.scatterplot(f'{algo}_x', f'{algo}_y',
                     data=df,
                     hue=f'clusters_{algo}')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
 
 #%%
 for algo in ['tsne', 'umap']:
@@ -278,7 +279,6 @@ for algo in ['tsne', 'umap']:
                  hue=f'clusters_{algo}')
     plt.savefig(Path('private', f'pairplot_{algo}.png'),
                 bbox_inches = 'tight')
-    plt.close()
 
 # %% PlotLy
 
