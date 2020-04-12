@@ -3,9 +3,10 @@ import spotipy
 import json
 from typing import Dict, List
 
-class adapter_spotipy_api:
+class SpotipyApi:
     """
-    class to adapter spotipy for our usage and this specific configuration
+    Adapter class to adapter spotipy for our usage and this specific 
+    configuration
     The authorization flow used here is authorization code:
     https://developer.spotify.com/documentation/general/guides/authorization-guide/#authorization-code-flow
     

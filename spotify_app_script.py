@@ -34,7 +34,7 @@ pd.reset_option('max_rows')
 
 
 # %%
-sp_adapter = lib.adapter_spotipy_api(
+sp_adapter = lib.SpotipyApi(
     credential_fp=Path(r'private/spotify_credential.json'),
     scope=' '.join(['user-library-read', 'user-top-read', ]),
     cache_path=Path(r'private')
@@ -67,7 +67,7 @@ df_likedsong = df_likedsong.drop('Unnamed: 0', axis=1)
 
 # %%
 
-genre_likedsong = lib.facade_enrich_artist_genre(
+genre_likedsong = lib.EnrichArtistGenre(
     df_likedsong['track.artists.0.id'],
     sp=sp_adapter.sp
 )

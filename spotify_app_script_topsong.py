@@ -30,7 +30,7 @@ from scipy.spatial.distance import yule
 from scipy.cluster.hierarchy import fcluster, dendrogram, linkage
 
 #%%
-sp_adapter = lib.adapter_spotipy_api(
+sp_adapter = lib.SpotipyApi(
     credential_fp=Path(r'private/spotify_credential.json'),
     scope=' '.join(['user-library-read','user-top-read',]),
     cache_path=Path(r'private')
@@ -77,7 +77,7 @@ df_toptracks = lib.normalize_request(
 
 # %%
 
-genre_toptracks = lib.facade_enrich_artist_genre(
+genre_toptracks = lib.EnrichArtistGenre(
     artists=df_toptracks['artists.0.id'],
     sp=sp_adapter.sp
 )
