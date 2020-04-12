@@ -2,7 +2,7 @@ import numpy as np
 from pathlib import Path
 import spotipy
 import pandas as pd
-from typing import Dict, List
+from typing import Dict, List, Union
 import seaborn as sns
 
 from sklearn.preprocessing import MultiLabelBinarizer
@@ -11,14 +11,20 @@ from scipy.cluster.hierarchy import (
     fcluster, dendrogram, linkage, cut_tree, leaders)
 from sklearn.cluster import OPTICS
 
+import hdbscan
+import spacy
+import re
+
 import matplotlib.pyplot as plt
 from IPython.display import display
 
+from chord import Chord
+
 from .util import _enrich_by_feature
 
-class facade_enrich_artist_genre:
+class EnrichArtistGenre:
     """
-    Class which handle the artists data and most particurarly the genre information from the artist.
+    Facade class which handle the artists data and most particurarly the genre information from the artist.
     https://spotipy.readthedocs.io/en/2.9.0/#spotipy.client.Spotify.recommendation_genre_seeds
 
     This class take care of the processing of the genres:
@@ -49,10 +55,12 @@ class facade_enrich_artist_genre:
     """
     
     
-    def __init__(self, artists:pd.Series, sp:spotipy.Spotify):
+    def __init__(self,
+                 artists:pd.Series,
+                 sp:Union[spotipy.Spotify, None]=None,
+                 genre:Union[pd.Series, None]=None):
         self._artist:pd.Series = pd.Series(artists.unique(),
                                            name = artists.name)
-        self._mlb:MultiLabelBinarizer = MultiLabelBinarizer()
 
         self.cluster = None
         self.df = None
@@ -61,10 +69,16 @@ class facade_enrich_artist_genre:
         self.feature = None
         self.supergenre_group = None
 
-        # setup the object by enriching with the genre and then cleaning them
-        self.enrich_artist_features(sp)
-        self.clean_useless_genre()
-
+        if sp is not None:
+            # if genre unavailable, enrich with the genre and then clean it
+            self.enrich_artist_features(sp)
+            self.clean_useless_genre()
+        elif genre is not None:
+            self.df:pd.DataFrame = pd.concat([genre, artists], axis=1)\
+                .set_axis(['genre', 'artists'], axis=1)\
+                .drop_duplicates('artists')\
+                .drop('artists', axis=1)
+            self._set_df_genre()
 
     @property
     def genre(self)->pd.Index:
@@ -83,6 +97,15 @@ class facade_enrich_artist_genre:
     def supergenre(self):
         return self.supergenre_group.columns
 
+    @staticmethod
+    def get_df_genre(index:pd.Index, genre_serie:pd.Series):
+        mlb = MultiLabelBinarizer()
+        df_genre = pd.DataFrame(
+            mlb.fit_transform(genre_serie),
+            columns = mlb.classes_,
+            index = index
+        )
+        return df_genre, mlb
 
     def enrich_artist_features(self, sp:spotipy.Spotify):
         
@@ -92,11 +115,13 @@ class facade_enrich_artist_genre:
         
         self.df:pd.DataFrame = self.feature[['genres']]
 
+        self._set_df_genre()
+
+    def _set_df_genre(self):
         # DataFrame with genre as a column and each row is an artist
-        self.df_genre = pd.DataFrame(
-            self._mlb.fit_transform(self.feature['genres']),
-            columns=self._mlb.classes_,
-            index=self._artist.index
+        self.df_genre, self._mlb = EnrichArtistGenre.get_df_genre(
+            index=self._artist.index,
+            genre_serie=self.df.iloc[:,0]
         )
         self._df_genre_raw = self.df_genre.copy()
 
@@ -110,7 +135,6 @@ class facade_enrich_artist_genre:
         Series of the deleted genres
         """
 
-        import spacy
         nlp = spacy.load("en_core_web_sm")
 
         # detect in each word in the genre name if it recognizes as a country, 
@@ -127,7 +151,7 @@ class facade_enrich_artist_genre:
         return self._genre_cleaned
 
 
-    def cluster_genre_fit(self, method='weighted', algorithm:str='hdbscan'):
+    def cluster_genre_fit(self, method='weighted', algorithm:str='dscan'):
         """
         This function fit the clustering models (the hierarchy one).
         A "cluster_genre_transform()" exist to apply your specific proposal
@@ -135,6 +159,8 @@ class facade_enrich_artist_genre:
         Clustering is done by 2 algorithms:
         * DBSCAN with OPTICS to detect the outliers
         * hierarchical clustering to create the "super-genre"
+
+        Strangely, DBscan seems to perform better in this metric...
 
         The metric used for the genre combination is the Yule distance:
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.yule.html
@@ -151,7 +177,6 @@ class facade_enrich_artist_genre:
         df_genre = self.df_genre.transpose()
 
         if algorithm is 'dbscan':
-            from sklearn.cluster import OPTICS
             self._optics = OPTICS(
                 max_eps=1,
                 min_samples=2,# to avoid lonely genre
@@ -162,7 +187,6 @@ class facade_enrich_artist_genre:
             )
             self.cluster_dbscan = self._optics.fit_predict(df_genre)
         elif algorithm is 'hdbscan':
-            import hdbscan
             self._mdl_hdbscan = hdbscan.HDBSCAN(
                 min_cluster_size=2,
                 metric='yule'
@@ -223,10 +247,10 @@ class facade_enrich_artist_genre:
 
 
     def cluster_genre_transform(
-        self,t:float=1.5, criterion='distance', **kwargs):
+        self,t:float=20, criterion='maxclust', verbose=False, **kwargs):
         """
-        Cut the linkage matrix of the hierarchical cluster using 'distance' 
-        criterion. For better understanding, use the available plotting 
+        Cut the linkage matrix of the hierarchical cluster using criterion.
+        For better understanding, use the available plotting 
         functions such as:
         * plot_clustermap()
         * plot_dendrogram()
@@ -238,9 +262,10 @@ class facade_enrich_artist_genre:
         ----------
         t : float
             this is the threshold to apply when forming flat clusters.
-            By default 1.5
+            By default 20
         criterion : str
             "scipy.cluster.hierarchy.fcluster" argument
+            By default "maxclust"
 
         """
         
@@ -276,6 +301,10 @@ class facade_enrich_artist_genre:
             axis=1
         ).to_list()
 
+        if verbose:
+            print(f'there is {len(self.supergenre)} supergenres')
+            self._analyse_supergenre()
+
 
     def cluster_genre_transform_auto(self, verbose=False):
         """
@@ -304,11 +333,11 @@ class facade_enrich_artist_genre:
         def minimize_genre_per_artists(x):
             self.cluster_genre_transform(t=x, criterion='distance')
             return self.supergenre_per_artists.mean() \
-                / np.log10(len(self.supergenre)) \
+                / np.log10(len(self.supergenre))\
                 * np.log10(self.supergenre_count_genre.max())
 
         res = minimize_scalar(minimize_genre_per_artists,
-                              options={'maxiter':10e4})
+                              options={'maxiter':10e3})
 
         self.cluster_genre_transform(t=res.x, criterion='distance')
 
@@ -422,8 +451,6 @@ class facade_enrich_artist_genre:
         Returns:
             List[str] -- list of words (as strngs)
         """
-        import re
-
         if x is np.nan:
             return []
         return re.findall(r"[\w']+", x)
@@ -507,5 +534,30 @@ class facade_enrich_artist_genre:
 
         return df.join(self.df.add_prefix(prefix),
                        on=self._artist.name)#\
-                # .assign(genres_id=self._mlb.fit_transform(self.df['genres']))
 
+    @staticmethod
+    def _plot_chord(df, name):
+        encounter_matrix = df.corr(lambda x, y: sum(x*y))\
+                             .values
+            
+        encounter_matrix = encounter_matrix - np.identity(len(name))
+        encounter_matrix = encounter_matrix.tolist()
+
+        Chord(encounter_matrix, name.to_list()).show()
+
+    def plot_chord_genre(self):
+        EnrichArtistGenre._plot_chord(self.df_genre, self.genre)
+
+    def plot_chord_supergenre(self):
+        EnrichArtistGenre._plot_chord(self.df_supergenre, self.supergenre)
+
+    def plot_chord_genre_from_supergenre(self, selection:Union[str, int]):
+        if isinstance(selection, int):
+            genre_select = self.df_supergenre.iloc[:, selection]
+        elif isinstance(selection, str):
+            genre_select = self.df_supergenre[selection]
+        else:
+            TypeError(f'{selection} is neither "int" nor "str"')
+        
+        EnrichArtistGenre._plot_chord(self.df_genre[genre_select],
+                                     genre_select)
