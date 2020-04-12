@@ -19,7 +19,7 @@ from itertools import chain
 from collections import Counter
 from statistics import mode
 
-from .adapter_spotipy_api import adapter_spotipy_api
+from .adapter_spotipy_api import SpotipyApi
 
 import plotly.graph_objects as go
 
@@ -152,7 +152,7 @@ def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
     return df.join(df_enriched, on=col)
     
 def enrich_audiofeature(df:pd.DataFrame,
-                        adapter:adapter_spotipy_api,
+                        adapter:SpotipyApi,
                         col:str='id')->pd.DataFrame:
     return enrich_df_by_feature(df,
                                 col=col,
@@ -193,3 +193,10 @@ def plotly_categorical_scatter(df, x:str, y:str, hue:str, size:str, text:str, li
             lambda trace: trace.on_click(click_event, append=True)
         )
     return fig
+
+def mask_outlier_iqr(x:pd.Series)->pd.DataFrame:
+    q1 = x.quantile(0.25)
+    q3 = x.quantile(0.75)
+    iqr = q3 - q1
+    return pd.DataFrame({'high': x > q3 + 1.5*iqr,
+                          'low': x < q1 - 1.5*iqr})
