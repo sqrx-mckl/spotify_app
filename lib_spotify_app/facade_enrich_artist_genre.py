@@ -6,10 +6,11 @@ from typing import Dict, List, Union
 import seaborn as sns
 
 from sklearn.preprocessing import MultiLabelBinarizer
-from scipy.spatial.distance import yule
+from scipy.spatial.distance import hamming
 from scipy.cluster.hierarchy import (
     fcluster, dendrogram, linkage, cut_tree, leaders)
 from sklearn.cluster import OPTICS
+from sklearn.neighbors import LocalOutlierFactor
 
 import hdbscan
 import spacy
@@ -38,8 +39,8 @@ class EnrichArtistGenre:
         * DBSCAN with OPTICS to detect the outliers
         * hierarchical clustering to create the "super-genre"
 
-    The metric used for the genre combination is the Yule distance:
-    https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.yule.html
+    The metric used for the genre combination is the Hamming distance:
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.hamming.html
     It is a binary array disambleance distance. It uses the amount of time a True is encountered at the same index for both arrays
 
     Parameters
@@ -72,13 +73,17 @@ class EnrichArtistGenre:
         if sp is not None:
             # if genre unavailable, enrich with the genre and then clean it
             self.enrich_artist_features(sp)
-            self.clean_useless_genre()
+        
         elif genre is not None:
             self.df:pd.DataFrame = pd.concat([genre, artists], axis=1)\
-                .set_axis(['genre', 'artists'], axis=1)\
+                .set_axis(['genres', 'artists'], axis=1)\
                 .drop_duplicates('artists')\
-                .drop('artists', axis=1)
+                .set_index('artists')
             self._set_df_genre()
+        
+        self.clean_geo_genre()
+        self.clean_genre_low_encounter()
+
 
     @property
     def genre(self)->pd.Index:
@@ -126,7 +131,7 @@ class EnrichArtistGenre:
         self._df_genre_raw = self.df_genre.copy()
 
 
-    def clean_useless_genre(self)->pd.Series:
+    def clean_geo_genre(self)->pd.Series:
         """
         spotify contains strange genre such as "alabama_indie" which are not useful for our purpose. As such this method get rids of all of them
 
@@ -139,19 +144,53 @@ class EnrichArtistGenre:
 
         # detect in each word in the genre name if it recognizes as a country, 
         # state, language, etc... Genre should be independant of country
-        def clean_geo(x:pd.Series):
-            for ent in nlp(x).ents:
-                is_geo = ent.label_ in ['NORP', 'GPE']
-            return any(is_geo)
+        def clean_geo(x:str):
+            is_geo = False
+            for word in x.split(' '):
+                for ent in list(nlp(word).ents):
+                    is_geo = is_geo or (ent.label_ in ['NORP', 'GPE', 'LOC'])
+            return is_geo
 
         mask = self.genre.to_series().apply(clean_geo)
-        self._genre_cleaned = self.df_genre.loc[:,mask].columns
+        self._genre_geo = self.df_genre.loc[:,mask].columns
         self.df_genre:pd.DataFrame = self.df_genre.loc[:,~mask]
 
-        return self._genre_cleaned
+        return self._genre_geo
 
 
-    def cluster_genre_fit(self, method='weighted', algorithm:str='dscan'):
+    def clean_genre_low_encounter(self, verbose=False):
+        """
+        The genres without interest will usually encounter very few other 
+        genres, as such we need to know how many different genres is 
+        encountered by each genre. This is the following plot
+        
+        Parameters
+        ----------
+        verbose : bool, optional
+            by default False
+        """
+        
+        encounter_genre = self.df_genre.corr(lambda x,y: max(x*y))
+        
+        # delete the genre with too low encounters
+        mask = encounter_genre.sum() >= 2
+
+        self._genre_low_encounter = self.genre[~mask]
+        self.df_genre:pd.DataFrame = self.df_genre.loc[:,mask]
+
+        if verbose:
+            display(f'There is {sum(~mask)} genres filetered')
+            with pd.option_context('display.max_rows', None):
+                display(pd.DataFrame(
+                    self.df_genre.sum()[~mask].sort_values(ascending=False)).T)
+
+            plt.figure()
+            encounter_genre.sum().loc[mask].plot(kind='box')
+            
+            plt.figure()
+            encounter_genre.sum().apply(np.log10).loc[mask].plot(kind='kde')
+
+    def cluster_genre_fit(self, method='weighted', algorithm:str='hdscan'):
         """
         This function fit the clustering models (the hierarchy one).
         A "cluster_genre_transform()" exist to apply your specific proposal
@@ -160,10 +199,8 @@ class EnrichArtistGenre:
         * DBSCAN with OPTICS to detect the outliers
         * hierarchical clustering to create the "super-genre"
 
-        Strangely, DBscan seems to perform better in this metric...
-
-        The metric used for the genre combination is the Yule distance:
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.yule.html
+        The metric used for the genre combination is the Hamming distance:
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.hamming.html
         It is a binary array disambleance distance. It uses the amount of time a True is encountered at the same index for both arrays
 
         Parameters
@@ -172,6 +209,11 @@ class EnrichArtistGenre:
             method for Hierarchical Clustering, see
             https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
             by default 'weighted'
+        algorithm : str
+            algorithm used for first clustering, DBscan. Can either be dbscan 
+            which will apply OPTICS + DBscan as per sklearn method. Or HDBSCAN 
+            which will apply new algorithm.
+            By default hdbscan
         """
 
         df_genre = self.df_genre.transpose()
@@ -180,7 +222,7 @@ class EnrichArtistGenre:
             self._optics = OPTICS(
                 max_eps=1,
                 min_samples=2,# to avoid lonely genre
-                metric='yule',
+                metric='hamming',
                 cluster_method='dbscan',
                 algorithm='brute',# only valid algorithm for this metric
                 n_jobs=-1
@@ -188,8 +230,8 @@ class EnrichArtistGenre:
             self.cluster_dbscan = self._optics.fit_predict(df_genre)
         elif algorithm is 'hdbscan':
             self._mdl_hdbscan = hdbscan.HDBSCAN(
-                min_cluster_size=2,
-                metric='yule'
+                min_cluster_size=3,
+                metric='hamming'
             )
             self.cluster_dbscan = self._mdl_hdbscan.fit_predict(df_genre)
         else:
@@ -202,7 +244,7 @@ class EnrichArtistGenre:
 
         self._linkage = linkage(self._df_genre_inlier.transpose(),
                                 method=method,
-                                metric='yule')
+                                metric='hamming')
         
 
     def _get_group_list(self,
@@ -246,6 +288,30 @@ class EnrichArtistGenre:
         return groups
 
 
+    def _setup_supergenre(self):
+        # Get a "semi-table" with the supergenre group
+        self.supergenre_group = self._get_group_list(self.cluster)
+
+        # name the super-genre
+        self.supergenre_group.columns = self.supergenre_group\
+            .applymap(self._split_word)\
+            .agg(lambda x: self._robust_str_mode(x.to_list()))
+        self.supergenre_group.columns = \
+            ['outliers'] + self.supergenre_group.columns.to_list()[1:]
+
+        # merge the super-genre into the list of songs artists
+        self.df_supergenre:pd.DataFrame = self.df_genre\
+            .groupby(self.cluster, axis=1)\
+            .max()\
+            .set_axis(self.supergenre, axis=1)
+
+        # add cluster to the table
+        self.df['supergenres'] = self.df_supergenre.apply(
+            lambda row: row.index[row==1].to_list(),
+            axis=1
+        ).to_list()
+
+
     def cluster_genre_transform(
         self,t:float=20, criterion='maxclust', verbose=False, **kwargs):
         """
@@ -276,37 +342,16 @@ class EnrichArtistGenre:
                                              **kwargs)
 
         # Add the outliers selected by DBSCAN
-        self.cluster = self.cluster_dbscan
-        self.cluster[self.cluster > -1] = self.cluster_hierarchical
+        self.cluster = self.cluster_dbscan.copy()
+        self.cluster[self.cluster_dbscan > -1] = self.cluster_hierarchical
 
-        # Get a "semi-table" with the supergenre group
-        self.supergenre_group = self._get_group_list(self.cluster)
-
-        # name the super-genre
-        self.supergenre_group.columns = self.supergenre_group\
-            .applymap(self._split_word)\
-            .agg(lambda x: self._robust_str_mode(x.to_list()))
-        self.supergenre_group.columns = \
-            ['outliers'] + self.supergenre_group.columns.to_list()[1:]
-
-        # merge the super-genre into the list of songs artists
-        self.df_supergenre:pd.DataFrame = self.df_genre.groupby(self.cluster,   
-                                                                axis=1)\
-            .max()\
-            .set_axis(self.supergenre, axis=1)
-
-        # add cluster to the table
-        self.df['supergenres'] = self.df_supergenre.apply(
-            lambda row: row.index[row==1].to_list(),
-            axis=1
-        ).to_list()
+        self._setup_supergenre()
 
         if verbose:
-            print(f'there is {len(self.supergenre)} supergenres')
             self._analyse_supergenre()
 
 
-    def cluster_genre_transform_auto(self, verbose=False):
+    def cluster_genre_transform_optimization(self, verbose=False):
         """
         This function fit the clustering models (the hierarchy one).
         Cut the linkage matrix of the hierarchical cluster using 'maxclust' 
@@ -334,25 +379,60 @@ class EnrichArtistGenre:
             self.cluster_genre_transform(t=x, criterion='distance')
             return self.supergenre_per_artists.mean() \
                 / np.log10(len(self.supergenre))\
-                * np.log10(self.supergenre_count_genre.max())
+                * np.log10(self.supergenre_count_genre.var())
 
         res = minimize_scalar(minimize_genre_per_artists,
                               options={'maxiter':10e3})
 
         self.cluster_genre_transform(t=res.x, criterion='distance')
 
-        # re-apply dbscan
-
-
         if verbose:
             print(f'distance optimal is {res.x}')
-            print(f'there is {len(self.supergenre)} supergenres')
             self._analyse_supergenre()
+
+
+    def cluster_genre_transform_dbscan(self, lof:bool=True, verbose:bool=False):
+        """
+        Cluster by DBscan directly
+        
+        Parameters
+        ----------
+        lof : bool, optional
+            to apply Local Outlier Factor on top of HDBscan to clean some genres
+        verbose : int, optional
+            verbose analysis, by default False
+        """
+        self.cluster = self.cluster_dbscan.copy()
+        self._setup_supergenre()
+
+        if lof:
+            # delete the genre with too low encounters
+            mask = LocalOutlierFactor(n_neighbors=10, metric='hamming')\
+                            .fit_predict(self.df_supergenre.T)
+            mask_select = mask == -1
+            select_cluster = [k for k, v in enumerate(mask_select) if ~v]
+
+            if verbose:
+                display(f'There is {sum(~mask_select)} genres filetered')
+
+                for mask_select_plot in [~mask_select, mask_select]:
+                    with pd.option_context('display.max_rows', None):
+                        display(pd.DataFrame(
+                            self.df_supergenre.sum()[mask_select_plot]\
+                                .sort_values(ascending=False)
+                        ))
+            
+            self.cluster[[x in select_cluster for x in self.cluster]] = -2
+
+        self._setup_supergenre()
+
+        if verbose:
+            self._analyse_supergenre()
+
+
 
     def cluster_genre(self,
                       method='weighted',
-                      supergenre_per_artists:int=2,
-                      fit:bool=True,
                       verbose:bool=False,
                       **kwargs):
         """
@@ -364,10 +444,9 @@ class EnrichArtistGenre:
 
         Clustering is done by 2 algorithms:
         * DBSCAN with OPTICS to detect the outliers
-        * hierarchical clustering to create the "super-genre"
 
-        The metric used for the genre combination is the Yule distance:
-        https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.yule.html
+        The metric used for the genre combination is the Hamming distance:
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.hamming.html
         It is a binary array disambleance distance. It uses the amount of time a True is encountered at the same index for both arrays
 
         
@@ -376,37 +455,23 @@ class EnrichArtistGenre:
         
         Parameters
         ----------
-        method : str
-            method for Hierarchical Clustering, see
-            https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.linkage.html
-            by default 'weighted'
-        t : float
-            this is the threshold to apply when forming flat clusters.
-            By default 10
-        supergenre_per_artists : int
-            how many supergenre per artists do we expect to achieve by 
-            optimizaton
-            by default 2
-        fit : bool
-            To fit the clustering algorithm (linkage), by default True
         verbose : bool
             Set to True to obtain useful plots and displayed values to help 
             analyse the clustering algorithm fitting and transformation
             By default False
         """
 
-        if fit:
-            self.cluster_genre_fit(method=method)
-
-        self.cluster_genre_transform(t=1, criterion='inconsistent')
+        self.cluster_genre_fit(method=method)
+        self.cluster_genre_transform_dbscan()
 
         if verbose:
-            self.plot_clustermap()
             self.plot_dendrogram()
             self._analyse_supergenre()
-            self.plot_heatmap_supergenre()
+            self.plot_chord_supergenre()
 
     def _analyse_supergenre(self):
+        print(f'there is {len(self.supergenre)} supergenres')
+
         plt.figure()
         self.df['supergenres']\
             .apply(lambda x: len(x))\
@@ -416,12 +481,14 @@ class EnrichArtistGenre:
         plt.figure()
         self.supergenre_group\
             .agg(lambda x: sum(x.notna()))\
+            .sort_values()\
             .plot(kind='barh')\
             .set_title('# of genre')
 
         plt.figure()
         self.df_supergenre\
             .sum()\
+            .sort_values()\
             .plot(kind='barh')\
             .set_title('# of occurences')
 
@@ -457,7 +524,7 @@ class EnrichArtistGenre:
 
 
     @staticmethod
-    def _robust_str_mode(x:List[List[str]], sep:str='_')->str:
+    def _robust_str_mode(x:List[List[str]], sep:str=' ')->str:
         """
         robust method to calculate the mode of a list of string, returns a 
         concatenate string in case of equal number of counter
@@ -472,12 +539,14 @@ class EnrichArtistGenre:
         """
         from itertools import chain
 
-        x = list(chain(*x))
+        word = list(chain(*x))
 
         # like mode() but more robust (give all modes concatenated in 1 string)
-        vc = pd.Series(x).value_counts()
-        x_to_join = vc.index[vc == vc.max()].values
-        return sep.join(x_to_join)
+        word_count = pd.Series(word).value_counts()
+        count_threshold = min([len(word_count.unique())-1, 1])
+        word_count_select = word_count >= word_count.unique()[count_threshold]
+        word_to_join = word_count.index[word_count_select].values
+        return sep.join(word_to_join)
 
 
     def plot_clustermap(self):
@@ -533,12 +602,11 @@ class EnrichArtistGenre:
         prefix = '.'.join(prefix[:-1]) + '.'
 
         return df.join(self.df.add_prefix(prefix),
-                       on=self._artist.name)#\
+                       on=self._artist.name)
 
     @staticmethod
     def _plot_chord(df, name):
-        encounter_matrix = df.corr(lambda x, y: sum(x*y))\
-                             .values
+        encounter_matrix = df.corr(lambda x, y: sum(x*y)).values
             
         encounter_matrix = encounter_matrix - np.identity(len(name))
         encounter_matrix = encounter_matrix.tolist()

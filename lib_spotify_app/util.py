@@ -193,10 +193,3 @@ def plotly_categorical_scatter(df, x:str, y:str, hue:str, size:str, text:str, li
             lambda trace: trace.on_click(click_event, append=True)
         )
     return fig
-
-def mask_outlier_iqr(x:pd.Series)->pd.DataFrame:
-    q1 = x.quantile(0.25)
-    q3 = x.quantile(0.75)
-    iqr = q3 - q1
-    return pd.DataFrame({'high': x > q3 + 1.5*iqr,
-                          'low': x < q1 - 1.5*iqr})
