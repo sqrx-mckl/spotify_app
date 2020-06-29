@@ -5,12 +5,6 @@ import json
 import pandas as pd
 from typing import Dict, List, Union
 
-from sklearn.preprocessing import MultiLabelBinarizer
-from scipy.spatial.distance import yule
-from scipy.cluster.hierarchy import (
-    fcluster, dendrogram, linkage, cut_tree, leaders)
-from sklearn.cluster import OPTICS
-
 import matplotlib.pyplot as plt
 from IPython.display import display
 
@@ -19,148 +13,18 @@ from itertools import chain
 from collections import Counter
 from statistics import mode
 
-from .adapter_spotipy_api import SpotipyApi
-
 import plotly.graph_objects as go
 
-def json_list2dict(d:Dict)->Dict:
-    """
-    Loop through all fields, and once it meet a list, it convert into a dict.
-    The converted output contains the index of the list as a key.
-    Conversion is done deeply to last level.
-    
-    Parameters
-    ----------
-    d : Dict
-        initial dict to convert
-    
-    Returns
-    -------
-    Dict
-        converted dict
-    """
 
-    for key, val in d.items():
-        # convert list 2 dict with key as the index if it contains a container
-        if isinstance(val, list) \
-        and len(val) > 0 \
-        and isinstance(val[0], (list, dict)):
-            val = {str(k):v for k, v in enumerate(val)}
-        # recursion (even for the newly converted list)
-        if isinstance(val, dict):
-            val = json_list2dict(val)
-        d[key] = val
-
-    return d
-
-
-def normalize_request(_request)->pd.DataFrame:
-    """
-    transform the output of a request into a DataFrame
-    
-    Parameters
-    ----------
-    request : Dict?
-        result of a request
-    
-    Returns
-    -------
-    pd.DataFrame
-        transformed result of the request which contained nested dictionnary
-    """
-    # some request gives back a strange dict with key the name of the
-    # request and values the lists output
-    if isinstance(_request, dict) and 'items' in _request.keys():
-        request = _request['items']
-    elif isinstance(_request, dict) \
-        and len(_request.keys()) == 1 \
-        and isinstance(_request[list(_request.keys())[0]], list):
-        request = _request[list(_request.keys())[0]]
-    else:
-        request = _request
-
-    # if there is multilple request inside the request (like a list). The 
-    # output is a list, else is a dict
-    if isinstance(request, list):
-        df_list = [pd.json_normalize(json_list2dict(r)) for r in request]
-        df = pd.concat(df_list).reset_index()
-    elif isinstance(request, dict):
-        df = pd.json_normalize(json_list2dict(request))
-    
-    return df
-
-
-def _enrich_by_feature(ser:pd.Series, f, w:int)->pd.DataFrame:
-    """
-    Helper function to retrieve the enriched data for enrich_df_by_feature
-    
-    Parameters
-    ----------
-    ser : pd.Series
-        Initial Series to use for enrichment
-    w : int
-        Size of the rolling window (to request multiple rows at a time)
-    f : function
-        Function to use to enrich the data
-    
-    Returns
-    -------
-    pd.DataFrame
-        Enriched DataFrame
-    """
-
-    # Get unique set of values
-    ser_un:pd.Series = pd.Series(ser.unique())
-
-    # Get request group
-    window_groups = [x // w for x in range(len(ser_un))]
-
-    # do the request, normalize it and set as index the initial serie
-    dfe = ser_un.groupby(window_groups)\
-                .apply(lambda x: normalize_request(f(x)))\
-                .set_index(ser_un)
-
-    # "map" the index to the full initial index
-    return dfe.loc[ser.to_list()]
-
-def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
-    """
-    Enrich the dataframe by requesting information
-    The request is done via a function which is called with a rolling window.
-    Use the following command to join your initial DataFrame with the enriched
-    
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame to be enriched
-    col : str
-        Initial column to use for enrichment
-    w : int
-        Size of the rolling window (to request multiple rows at a time)
-    f : function
-        Function to use to enrich the data
-    
-    Returns
-    -------
-    pd.DataFrame
-        [description]
-    """
-
-    df_enriched = _enrich_by_feature(df[col], f=f, w=w)
-    df_enriched = df_enriched.add_prefix(f'{col}.')
-
-    return df.join(df_enriched, on=col)
-    
-def enrich_audiofeature(df:pd.DataFrame,
-                        adapter:SpotipyApi,
-                        col:str='id')->pd.DataFrame:
-    return enrich_df_by_feature(df,
-                                col=col,
-                                f=adapter.sp.audio_features,
-                                w=100)
-
-
-def plotly_categorical_scatter(df, x:str, y:str, hue:str, size:str, text:str, link:str)->go.FigureWidget:
+def plotly_categorical_scatter(
+    df,
+    x:str,
+    y:str,
+    hue:str,
+    size:str,
+    text:str,
+    link:str
+) -> go.FigureWidget:
 
     import webbrowser
 
@@ -193,3 +57,54 @@ def plotly_categorical_scatter(df, x:str, y:str, hue:str, size:str, text:str, li
             lambda trace: trace.on_click(click_event, append=True)
         )
     return fig
+
+
+def concatenate_col(df:pd.DataFrame, pattern:str) -> pd.Series:
+    """
+    Concatenate the columns of a pd.DataFrame into a single pd.Series.
+    The values in the new pd.Series will be a list of the values in the row of df.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        initial dataframe to concatenate all columns per row
+
+    Returns
+    -------
+    pd.Series[List]
+        the value in each row is a list of the values in each row of df
+    """
+
+    return df.filter(regex=pattern)\
+             .apply(lambda x: x.dropna().to_list(), axis=1)
+
+def proj_and_cluster(df_feat, mdl_proj, mdl_cluster) -> pd.DataFrame:
+    """
+    Apply projection model (t-sne or u-map for example) and a cluster model (hdbscan for example). Creates a DataFrame with following columns:
+    * proj_x, proj_y: the projections 
+    * clusters: the clusters as text
+
+    Parameters
+    ----------
+    df_feat : [type]
+        [description]
+    mdl_proj : [type]
+        [description]
+    mdl_cluster : [type]
+        [description]
+
+    Returns
+    -------
+    pd.DataFrame
+        [description]
+    """
+    df = pd.DataFrame(
+        mdl_proj.fit_transform(df_feat),
+        index=df_feat.index,
+        columns=['proj_x', 'proj_y']
+    )
+
+    df['clusters'] = mdl_cluster.fit_predict(df)
+    df['clusters'] = df['clusters'].apply(lambda x: f'c{x}')
+
+    return df
