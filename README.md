@@ -10,3 +10,6 @@ Here is a static plot, all songs in a 2D projected view (with UMAP) and clustere
 Dynamic plot of each top3 songs in each cluster:
 
 [Notebook link](https://nbviewer.jupyter.org/github/sqrx-mckl/spotify_app/blob/master/4_eda_umap_clustering.ipynb#My-most-popular-songs-in-a-2D-plot)
+
+[Notebook mirror link](https://nbviewer.jupyter.org/github/sqrx-mckl/spotify_app/blob/431a213f0a75b4fdae96a9ac86b1f9d58964ed90/4_eda_umap_clustering.ipynb#My-most-popular-songs-in-a-2D-plot)
+
