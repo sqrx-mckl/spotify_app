@@ -5,9 +5,9 @@ Creation of a simple spotify app that can cluster the "liked songs" playlist fro
 
 Dynamic plot of each top3 songs in each cluster:
 
-[Notebook link](https://nbviewer.jupyter.org/github/sqrx-mckl/spotify_app/blob/master/3short_eda_umap_clustering.ipynb#My-most-popular-songs-in-a-2D-plot)
+[Notebook short version link](https://nbviewer.jupyter.org/github/sqrx-mckl/spotify_app/blob/master/3short_eda_umap_clustering.ipynb#My-most-popular-songs-in-a-2D-plot)
 
-[Notebook mirror link](https://nbviewer.jupyter.org/github/sqrx-mckl/spotify_app/blob/master/3_eda_umap_clustering.ipynb#My-most-popular-songs-in-a-2D-plot)
+[Notebook complete version link](https://nbviewer.jupyter.org/github/sqrx-mckl/spotify_app/blob/master/3_eda_umap_clustering.ipynb#My-most-popular-songs-in-a-2D-plot)
 
 ## Example of output
 
