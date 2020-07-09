@@ -13,6 +13,11 @@ Dynamic plot of each top3 songs in each cluster:
 
 Here is a static plot, all songs in a 2D projected view (with UMAP) and clustered with HDBSCAN and mahalanobis metric:
 
+#### All songs in a 2D plot
 ![All songs in a 2D plot](img/umap_clusters.svg?raw=true "UMAP")
+#### Audio features per Cluster
 ![Audio features per Cluster](img/cluster_audio_features.svg?raw=true "Audio Features Cluster")
-
+#### Audio features in the projection
+![Audio features in the projection](img/audio_features_projection.png?raw=true "Audio features in the projection")
+#### Song visualization with playback
+![Song visualization with playback](img/song_visualization.png?raw=true "Song visualization with playback")
