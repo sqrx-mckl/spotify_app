@@ -14,6 +14,36 @@ from collections import Counter
 from statistics import mode
 
 import plotly.graph_objects as go
+import plotly.express as px
+
+def plotly_scatter(df, cluster_col='cluster'):
+    df['hover_text'] = df.apply(
+        lambda x:
+            f'<br>'+
+            f'Full Song: <a href="{x["track.external_urls.spotify"]}">Play</a><br>' +
+            f'Album: {x["track.album.name"]}<br>' +
+            # f'Genres: {x["artists.genres"]}<br>'+
+            # f'Super Genres: {x["artists.supergenres"]}<br>' +
+            f'Super Genre 1: {x["artists.supergenre_1"]}<br>',
+        axis=1
+    )
+
+    df['size'] = df['track.popularity'].apply(lambda x: np.log(x+1))
+
+    fig = px.scatter(
+        df,
+        x='x_map',
+        y='y_map',
+        hover_name='fullname',
+        hover_data=['hover_text'],
+        text=df['track.preview_url'].map(lambda x: f'<a href="{x}">Play</a>'),
+        size='size',
+        color=df[cluster_col].astype(str),
+        color_discrete_sequence=px.colors.qualitative.Vivid,
+        title=f'my songs per {cluster_col}'
+    )
+
+    return fig
 
 
 def plotly_categorical_scatter(
@@ -108,3 +138,4 @@ def proj_and_cluster(df_feat, mdl_proj, mdl_cluster) -> pd.DataFrame:
     df['clusters'] = df['clusters'].apply(lambda x: f'c{x}')
 
     return df
+

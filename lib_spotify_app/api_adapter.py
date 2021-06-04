@@ -1,57 +1,103 @@
 from pathlib import Path
 import spotipy
+from spotipy.oauth2 import SpotifyOAuth, SpotifyClientCredentials
+from spotipy.cache_handler import CacheHandler, CacheFileHandler
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
 import pylast
 import pandas as pd
+from functools import partial
+
+__all__ = [
+    "get_credential",
+    "setup_spotipy",
+    "setup_lastfm",
+    "query_loop",
+    "query_liked_songs",
+    "normalize_request",
+    "enrich_df_by_feature",
+    "enrich_audiofeature",
+    "make_spotify_playlist",
+    "get_playlist"
+]
+
+
+def get_credential(credential_fp:Union[Path, str]) -> Dict:
+    if isinstance(credential_fp, Path):
+        credential_fp = str(credential_fp)
+    with open(credential_fp) as file:
+        credential = json.load(file)
+    return credential
+
+
+def get_cache(
+    cache_path:Optional[str]=None,
+    username:Optional[str]=None
+) -> CacheFileHandler:
+
+    if Path(cache_path).suffix == '' and username is None:
+        cache_path = f"{cache_path}.cache"
+    elif Path(cache_path).suffix == '':
+        cache_path = f"{cache_path}.cache-{username}"
+
+    return CacheFileHandler(cache_path=cache_path, username=username)
+
 
 def setup_spotipy(
-    credential_fp:Path,
-    scope:List[str],
-    cache_path:Path
+    client_credential_fp:Optional[Union[str, Path]]=None,
+    username:Optional[str]=None,
+    scope:Optional[List[str]]=None,
+    cache_path:Optional[Union[str, Path]]=None,
 ) -> spotipy.Spotify:
     """
-    Initialize an instance of the spotipy.Spotify API without need to know how to setup the object.
+    Initialize an instance of the Spotify API without know-how of the setup internal.
 
     Parameters
     ----------
-    credential_fp : Path
-        path to the credential JSON file
-        This JSON file must contains the following field:
-            * username - the Spotify username
-            * client_id - the client id of your app
-            * client_secret - the client secret of your app
+    cache_path : Optional[Union[str, Path]]
+        If provided: Path to the cache folder for the authentification files
     scope : List[str]
         list of scope, see:
         https://developer.spotify.com/documentation/general/guides/scopes/
-    cache_path : Path
-        Path to the folder where to save the cache file
+    username: Optional[str]:
+        Spotify username (else will use a public session, no logged users)
+    credential_fp : Optional[Union[str, Path]]
+        If not provided, will use environment variable
 
     Returns
     -------
     spotipy.Spotify
-        Spotipy API Facade instance
+        Spotipy API instance
     """
 
-    scope = ' '.join(scope)
-    
-    with open(credential_fp) as file:
-        credential = json.load(file)
-    
-    # save user token in ".cache-<username>" file at user defined location
-    cache_path = Path(cache_path, f'.cache-{credential["username"]}')
+    scope = scope if scope is None else  ' '.join(scope)
+    if isinstance(cache_path, Path):
+        cache_path = str(cache_path)
+
+    if client_credential_fp is None:
+        credential = {"client_id":None, "client_secret":None} # use environment variable
+    else:
+        credential = get_credential(credential_fp=client_credential_fp)
+
+    # if (username is None) and (scope is None):
+    #     auth_manager = SpotifyClientCredentials()
+
+    # to cache or not to cache the client id, client secret and username secret
+    if cache_path is None:
+        cache_handler = None
+    else:
+        cache_handler = get_cache(cache_path, username)
 
     # new method as per <https://github.com/plamere/spotipy/issues/263>
-    # open an authentification by OAuth
-    return spotipy.Spotify(
-        auth_manager=spotipy.SpotifyOAuth(
+    auth_manager = SpotifyOAuth(
             client_id=credential["client_id"],
             client_secret=credential["client_secret"],
-            redirect_uri="http://localhost/",
+            redirect_uri="http://localhost:8080",
             scope=scope,
-            cache_path=cache_path
+            cache_handler=cache_handler
         )
-    )
+
+    return spotipy.Spotify(auth_manager=auth_manager)
 
 
 def setup_lastfm(credential_fp) -> pylast.LastFMNetwork:
@@ -82,18 +128,84 @@ def setup_lastfm(credential_fp) -> pylast.LastFMNetwork:
         )
         
         # get user information instance
-        api.user:pylast.User = api.get_user(credential['username'])
+        api.user = api.get_user(credential['username'])
 
         return api
 
 
+def query_loop(
+    query_function,
+    tracks_count:int=None,
+    limit:int=50,
+    verbose=False
+) -> pd.DataFrame:
+    """
+    Query in a loop.
+    Spotify API limit the number of queried songs to 50 or 100 at a time.
+    
+    Parameters
+    ----------
+    tracks_count : int, optional
+        quantity of tracks to query, chose None to query all tracks
+        by default None
+    limit : int, optional
+        how many tracks to query at once, maximum is 50, by default 50
+    
+    Returns
+    -------
+    pd.DataFrame
+        The results from a list of JSON request results to a DataFrame
+    """
+
+    # argument test
+    if isinstance(query_function, partial):
+        function_var = query_function.func.__code__.co_varnames
+    else:
+        function_var = query_function.__code__.co_varnames
+    assert 'limit' in function_var, "query function is not a spotipy loop query"
+    assert 'offset' in function_var, "query function is not a spotipy loop query"
+
+    result = {'items':[]}
+
+    while True:
+        # cache the previous result
+        result_item_temp = result['items']
+
+        # new query with recursive arguments
+        result = query_function(
+            limit=limit,
+            offset=len(result_item_temp)
+        )
+
+        # update info using query result
+        if tracks_count is None:
+            tracks_count = result['total']
+
+        # append the dictionnary output
+        result['items'] += result_item_temp
+
+        if verbose:
+            count_prev = len(result_item_temp)
+            count_next = len(result['items'])
+            print(f'Download: {count_prev} -> {count_next}')
+
+        # update argument for last query adjustement
+        limit = min([limit, tracks_count-len(result['items'])])
+
+        if limit <= 0:
+            break
+
+    return normalize_request(result)
+
 def query_liked_songs(
     sp:spotipy.Spotify,
     tracks_count:int=None,
-    limit:int=50
+    limit:int=50,
+    verbose=False
 ) -> pd.DataFrame:
     """
-    Query the current user liked songs in a loop. Spotify API limit the number of queried songs to 50 at a time.
+    Query the current user liked songs in a loop.
+    Spotify API limit the number of queried songs to 50 at a time.
     
     Parameters
     ----------
@@ -109,32 +221,12 @@ def query_liked_songs(
         The results as in a list of JSON request results
     """
 
-    result = {'items':[]}
-
-    while True:
-        # cache the previous result
-        result_item_temp = result['items']
-
-        # new query with recursive arguments
-        result = sp.current_user_saved_tracks(
-            limit=limit,
-            offset=len(result_item_temp)
-        )
-
-        # update info using query result
-        if tracks_count is None:
-            tracks_count = result['total']
-        
-        # append the dictionnary output
-        result['items'] += result_item_temp
-
-        # update argument for last query adjustement
-        limit = min([limit, tracks_count-len(result['items'])])
-
-        if limit <= 0:
-            break
-
-    return normalize_request(result)
+    return query_loop(
+        sp.current_user_saved_tracks,
+        tracks_count=tracks_count,
+        limit=limit,
+        verbose=verbose
+    )
 
 
 def normalize_request(_request) -> pd.DataFrame:
@@ -276,3 +368,76 @@ def _json_list2dict(d:Dict)->Dict:
         d[key] = val
 
     return d
+
+
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+
+def make_spotify_playlist(
+    name:str,
+    sp:spotipy.Spotify,
+    username:str,
+    songs:pd.Series
+) -> None:
+    r_playlist = sp.user_playlist_create(username, name)
+
+    for track_ids in chunks(songs.to_list(), 50):
+        sp.playlist_add_items(r_playlist['id'], track_ids)
+
+    # return boolean ?
+
+
+def get_playlist(
+    sp:spotipy.Spotify,
+    playlist_uri:str,
+    get_name:bool=False,
+    tracks_count:Optional[int]=None,
+    limit:int=100,
+    verbose:bool=False
+) -> pd.DataFrame:
+    
+    df = query_loop(
+        partial(sp.playlist_tracks, playlist_id=playlist_uri),
+        tracks_count=tracks_count,
+        limit=limit,
+        verbose=verbose
+    )
+    
+    if get_name:
+        request = sp.playlist(playlist_id=playlist_uri, fields="name")
+        name = request['name']
+        return name, df
+    else:
+        return df
+
+
+def test_public():
+    sp = setup_spotipy(
+        cache_path="private/credential_spotipy",
+        client_credential_fp="private/spotify_credential.json",
+    )
+
+    df = get_playlist(sp, "37i9dQZF1DX6ujZpAN0v9r")
+
+    assert Path("private/credential_spotipy.cache").is_file()
+    assert Path("private/spotify_credential.json").is_file()
+    assert df.shape == (100, 65)
+
+
+def test_user():
+    sp = setup_spotipy(
+        cache_path="private/credential_spotipy",
+        client_credential_fp="private/spotify_credential.json",
+        username='squarex',
+        scope=['user-library-read']
+    )
+
+    df = query_liked_songs(sp, tracks_count=50)
+
+    assert Path("private/credential_spotipy.cache-squarex").is_file()
+    assert Path("private/spotify_credential.json").is_file()
+    assert df.shape == (50, 73)
+

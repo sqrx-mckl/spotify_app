@@ -2,7 +2,7 @@ import numpy as np
 from pathlib import Path
 import spotipy
 import pandas as pd
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Tuple
 import seaborn as sns
 
 from sklearn.preprocessing import MultiLabelBinarizer
@@ -12,7 +12,7 @@ from scipy.cluster.hierarchy import (
 from sklearn.cluster import OPTICS
 from sklearn.neighbors import LocalOutlierFactor
 
-import hdbscan
+from hdbscan import HDBSCAN
 import spacy
 import re
 
@@ -21,7 +21,14 @@ from IPython.display import display
 
 from chord import Chord
 
+from .util import concatenate_col
 from .api_adapter import _enrich_by_feature
+
+__all__ = [
+    "add_genres",
+    "EnrichArtistGenre",
+    "join_genre"
+]
 
 class EnrichArtistGenre:
     """
@@ -260,12 +267,11 @@ class EnrichArtistGenre:
         self.supergenre_group = self._get_group_list(self.cluster)
 
         # name the super-genre
-        self.supergenre_group.columns = self.supergenre_group\
+        supergenres = self.supergenre_group\
             .applymap(self._split_word)\
-            .agg(lambda x: self._robust_str_mode(x.to_list()))
-
-        self.supergenre_group.columns = self.supergenre_group\
-                                            .columns.to_list()
+            .agg(lambda x: self._robust_str_mode(x.to_list()))\
+            .tolist()
+        self.supergenre_group.columns = [f'{i}_{x}' for i, x in enumerate(supergenres)]
 
         # merge the super-genre into the list of songs artists
         self.df_supergenre:pd.DataFrame = self.df_genre\
@@ -274,11 +280,11 @@ class EnrichArtistGenre:
             .set_axis(self.supergenre, axis=1)
 
         # add cluster to the table
-        self.df['supergenres'] = self.df_supergenre.apply(
+        s_supergenres = self.df_supergenre.apply(
             lambda row: row.index[row==1].to_list(),
             axis=1
-        ).to_list()
-
+        )
+        self.df = self.df.assign(supergenres=s_supergenres)
 
     @staticmethod
     def get_df_genre(index:pd.Index, genre_serie:pd.Series):
@@ -301,7 +307,7 @@ class EnrichArtistGenre:
         Returns:
             List[str] -- list of words (as strngs)
         """
-        if x is np.nan:
+        if isinstance(x, float) and np.isnan(x):
             return []
         return re.findall(r"[\w']+", x)
 
@@ -427,10 +433,9 @@ class EnrichArtistGenre:
         elif isinstance(selection, str):
             genre_select = self.df_supergenre[selection]
         else:
-            TypeError(f'{selection} is neither "int" nor "str"')
+            raise TypeError(f'{selection} is neither "int" nor "str"')
         
-        EnrichArtistGenre._plot_chord(self.df_genre[genre_select],
-                                     genre_select)
+        EnrichArtistGenre._plot_chord(self.df_genre[genre_select], genre_select)
 
     # clustering methods -----------------------------------------------------
 
@@ -462,7 +467,7 @@ class EnrichArtistGenre:
 
         df_genre = self.df_genre.transpose()
 
-        if algorithm is 'dbscan':
+        if algorithm == 'dbscan':
             self._optics = OPTICS(
                 max_eps=1,
                 min_samples=2,# to avoid lonely genre
@@ -472,8 +477,8 @@ class EnrichArtistGenre:
                 n_jobs=-1
             )
             self.cluster_dbscan = self._optics.fit_predict(df_genre)
-        elif algorithm is 'hdbscan':
-            self._mdl_hdbscan = hdbscan.HDBSCAN(
+        elif algorithm == 'hdbscan':
+            self._mdl_hdbscan = HDBSCAN(
                 min_cluster_size=3,
                 metric='hamming'
             )
@@ -675,3 +680,50 @@ def join_genre(ser_artist_id:pd.Series, df_genre:pd.DataFrame) -> pd.Series:
         lambda x: sum(genre_df.loc[x].tolist(), [])
     )
     
+
+def add_genres(
+    df,
+    sp,
+    col_regex='artists\.\d+\.id'
+) -> Tuple[pd.DataFrame, EnrichArtistGenre]:
+
+    genre = EnrichArtistGenre(
+        artists_id=df.filter(regex=col_regex),
+        sp=sp
+    )
+    genre.clean_geo_genre()
+
+    mdl_hdbscan = HDBSCAN(
+        min_cluster_size=16,
+        min_samples=16,
+        metric='hamming'
+    )
+    cluster_hdbscan = mdl_hdbscan.fit_predict(genre.df_genre.transpose())
+    genre.cluster = cluster_hdbscan
+    genre._setup_supergenre()
+
+    # concat artists
+    df['artists.id'] = concatenate_col(df, col_regex)
+
+    # add genres
+    genre_df = genre.df_genre.apply(
+        lambda row: row.index[row == True].tolist(),
+        axis=1
+    )
+    df['artists.genres'] = df['artists.id'].map(
+        lambda x: sum(genre_df.loc[x].tolist(), [])
+    )
+
+    # add supergenres
+    df['artists.supergenres'] = join_genre(
+        df['artists.id'],
+        genre.df_supergenre
+    )
+
+    # add first supergenres
+    df['artists.supergenre_1'] = df['artists.supergenres'].map(
+        lambda x: x[-1] if len(x) > 0 else np.NaN
+    )
+
+    return df, genre
+
