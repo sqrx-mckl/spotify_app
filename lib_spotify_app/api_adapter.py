@@ -6,6 +6,7 @@ import json
 from typing import Dict, List, Optional, Union
 import pylast
 import pandas as pd
+import numpy as np
 from functools import partial
 
 __all__ = [
@@ -257,11 +258,24 @@ def normalize_request(_request) -> pd.DataFrame:
     # if there is multilple request inside the request (like a list). The 
     # output is a list, else is a dict
     if isinstance(request, list):
-        df_list = [pd.json_normalize(_json_list2dict(r)) for r in request]
-        df = pd.concat(df_list).reset_index()
+        df_list = []
+
+        for r in request:
+            # Spotify API returns some member of the request as "None"
+            if r is None:
+                # Trick to add NaN values at this row
+                df_list.append(pd.json_normalize({}))
+            else:
+                df_list.append(pd.json_normalize(_json_list2dict(r)))
+
+        if not df_list: # all is None
+            raise ValueError("all values from request are None")
+        
+        df = pd.concat(df_list).reset_index(drop=True)
+    
     elif isinstance(request, dict):
         df = pd.json_normalize(_json_list2dict(request))
-    
+
     return df
 
 
@@ -285,18 +299,19 @@ def _enrich_by_feature(ser:pd.Series, f, w:int)->pd.DataFrame:
     """
 
     # Get unique set of values
-    ser_un:pd.Series = pd.Series(ser.unique())
+    ser_unique = ser.drop_duplicates()
 
     # Get request group
-    window_groups = [x // w for x in range(len(ser_un))]
+    window_groups = [x // w for x in range(ser_unique.shape[0])]
 
     # do the request, normalize it and set as index the initial serie
-    dfe = ser_un.groupby(window_groups)\
-                .apply(lambda x: normalize_request(f(x)))\
-                .set_index(ser_un)
+    dfe:pd.DataFrame = ser_unique.groupby(window_groups)\
+                                 .apply(lambda x: normalize_request(f(x)))\
+                                 .set_index(ser_unique)
 
-    # "map" the index to the full initial index
-    return dfe.loc[ser.to_list()]
+    # "map" the index to the duplicated initial index
+    #return dfe.merge(ser, how='right', left_index=True, right_on=ser.name)
+    return dfe
 
 
 def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
@@ -325,7 +340,8 @@ def enrich_df_by_feature(df:pd.DataFrame, col:str, f, w:int)->pd.DataFrame:
     df_enriched = _enrich_by_feature(df[col], f=f, w=w)
     df_enriched = df_enriched.add_prefix(f'{col}.')
 
-    return df.join(df_enriched, on=col)
+    #return df.merge(df_enriched, on=col, how="left")
+    return df.merge(df_enriched, left_on=col, right_index=True, how='left')
     
 
 def enrich_audiofeature(df:pd.DataFrame,
