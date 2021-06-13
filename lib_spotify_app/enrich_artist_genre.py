@@ -682,13 +682,28 @@ def join_genre(ser_artist_id:pd.Series, df_genre:pd.DataFrame) -> pd.Series:
     
 
 def add_genres(
-    df,
-    sp,
-    col_regex='artists\.\d+\.id'
+    df:pd.DataFrame,
+    sp:spotipy.Spotify,
+    col_regex='artists\.\d+'
 ) -> Tuple[pd.DataFrame, EnrichArtistGenre]:
+    """
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame to enrich with genres and artists info
+    sp : spotipy.Spotify
+        Session to use
+    col_regex : str
+        Regex String which indicates the position of the artists subcolumns
+
+    Returns
+    -------
+    [pd.DataFrame, EnrichArtistGenre]
+        the enriched dataframe, the class which created the genres
+    """
 
     genre = EnrichArtistGenre(
-        artists_id=df.filter(regex=col_regex),
+        artists_id=df.filter(regex=col_regex+"\.id"),
         sp=sp
     )
     genre.clean_geo_genre()
@@ -703,7 +718,8 @@ def add_genres(
     genre._setup_supergenre()
 
     # concat artists
-    df['artists.id'] = concatenate_col(df, col_regex)
+    df['artists.id'] = concatenate_col(df, col_regex+"\.id")
+    df['artists.name'] = concatenate_col(df, col_regex+"\.name")
 
     # add genres
     genre_df = genre.df_genre.apply(
