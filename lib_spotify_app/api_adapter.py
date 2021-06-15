@@ -170,25 +170,32 @@ def query_loop(
 
     while True:
         # cache the previous result
-        result_item_temp = result['items']
+        result_item_prev = result['items']
 
         # new query with recursive arguments
         result = query_function(
             limit=limit,
-            offset=len(result_item_temp)
+            offset=len(result_item_prev)
         )
 
         # update info using query result
         if tracks_count is None:
             tracks_count = result['total']
+        else:
+            tracks_count = min([tracks_count, result['total']])
+
+        # Bug in Spotify API for "episodes"
+        nb_missing = limit - len(result['items'])
+        if nb_missing != 0:
+            result['items'] += [None] * nb_missing
 
         # append the dictionnary output
-        result['items'] += result_item_temp
+        result['items'] += result_item_prev
 
         if verbose:
-            count_prev = len(result_item_temp)
+            count_prev = len(result_item_prev)
             count_next = len(result['items'])
-            print(f'Download: {count_prev} -> {count_next}')
+            print(f'Downloaded: {count_prev} -> {count_next}')
 
         # update argument for last query adjustement
         limit = min([limit, tracks_count-len(result['items'])])
